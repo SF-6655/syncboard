@@ -9,9 +9,10 @@ export default function Landing() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  async function handleCreateRoom() {
-    setLoading(true)
-    setError('')
+async function handleCreateRoom() {
+  sessionStorage.removeItem('syncboard-identity')
+  setLoading(true)
+  setError('')
 
     let code = generateRoomCode()
     let attempts = 0
@@ -43,11 +44,12 @@ const { error: insertError } = await supabase
     navigate(`/room/${code}`, { replace: true })
   }
 
-  async function handleJoinRoom(e) {
-    e.preventDefault()
-    if (!joinCode.trim()) return
-    setLoading(true)
-    setError('')
+async function handleJoinRoom(e) {
+  e.preventDefault()
+  if (!joinCode.trim()) return
+  sessionStorage.removeItem('syncboard-identity')
+  setLoading(true)
+  setError('')
 
     const code = joinCode.trim().toUpperCase()
 
