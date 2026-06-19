@@ -108,16 +108,15 @@ export default function Room() {
     setStoredTheme(key)
   }
 
-  useEffect(() => {
-    setIdentity(getOrCreateIdentity())
-  }, [])
-
-  function handleJoin(chosenName) {
-    const updated = updateIdentityName(chosenName)
-    setIdentity(updated)
-    sessionStorage.setItem(`joined-${code}`, 'true')
-    setHasJoined(true)
-  }
+function handleJoin(chosenName) {
+  // Generate a fresh identity now, with the user's chosen name
+  const base = getOrCreateIdentity()
+  const updated = { ...base, name: chosenName.trim().slice(0, 20) || base.name }
+  sessionStorage.setItem('syncboard-identity', JSON.stringify(updated))
+  sessionStorage.setItem(`joined-${code}`, 'true')
+  setIdentity(updated)
+  setHasJoined(true)
+}
 
   useEffect(() => {
     async function checkRoom() {
@@ -224,13 +223,17 @@ export default function Room() {
     )
   }
 
-  if (roomExists === null || !identity) {
-    return <div style={s.loading}>Connecting...</div>
-  }
+if (roomExists === null) {
+  return <div style={s.loading}>Connecting...</div>
+}
 
-  if (!hasJoined) {
-    return <JoinModal roomCode={code} onJoin={handleJoin} />
-  }
+if (!hasJoined) {
+  return <JoinModal roomCode={code} onJoin={handleJoin} />
+}
+
+if (!identity) {
+  return <div style={s.loading}>Connecting...</div>
+}
 
   return (
     <div style={{ ...s.page, background: theme.bg }}>
