@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { getOrCreateIdentity, updateIdentityName } from '../lib/roomUtils'
+import { getOrCreateIdentity } from '../lib/roomUtils'
 import JoinModal from '../components/JoinModal'
 import { usePresence } from '../hooks/usePresence'
 import { useNotes } from '../hooks/useNotes'
@@ -13,16 +13,20 @@ import { useVoiceChat } from '../hooks/useVoiceChat'
 function useClickOutside(ref, onOutside) {
   useEffect(() => {
     function handleClick(e) {
-      if (ref.current && !ref.current.contains(e.target)) {
-        onOutside()
-      }
+      if (ref.current && !ref.current.contains(e.target)) onOutside()
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [ref, onOutside])
 }
 
-function VoiceSettingsPopover({ sensitivity, setSensitivity, micLevel, outputVolume, setOutputVolume, onClose }) {
+function VoiceSettingsPopover({
+  sensitivity, setSensitivity, micLevel,
+  outputVolume, setOutputVolume,
+  audioDevices, selectedInput, setSelectedInput,
+  selectedOutput, setSelectedOutput,
+  onClose,
+}) {
   const ref = useRef(null)
   useClickOutside(ref, onClose)
   const thresholdMarkerPercent = Math.max(4, Math.min(96, 50 - sensitivity / 2.2))
@@ -30,6 +34,7 @@ function VoiceSettingsPopover({ sensitivity, setSensitivity, micLevel, outputVol
   return (
     <div ref={ref} style={s.popover}>
       <div style={s.popoverHeader}>Voice settings</div>
+
       <div style={s.popoverSection}>
         <div style={s.popoverLabelRow}>
           <span style={s.popoverLabel}>Mic sensitivity</span>
@@ -39,27 +44,52 @@ function VoiceSettingsPopover({ sensitivity, setSensitivity, micLevel, outputVol
           <div style={{ ...s.meterFill, width: `${Math.round(micLevel * 100)}%` }} />
           <div style={{ ...s.meterThreshold, left: `${thresholdMarkerPercent}%` }} />
         </div>
-        <input
-          type="range" min={-100} max={100} value={sensitivity}
-          onChange={(e) => setSensitivity(Number(e.target.value))}
-          style={s.slider}
-        />
+        <input type="range" min={-100} max={100} value={sensitivity}
+          onChange={(e) => setSensitivity(Number(e.target.value))} style={s.slider} />
         <div style={s.sliderHints}>
           <span>Opens easily</span>
           <span>Needs more volume</span>
         </div>
       </div>
+
       <div style={s.popoverSection}>
         <div style={s.popoverLabelRow}>
           <span style={s.popoverLabel}>Output volume</span>
           <span style={s.popoverValue}>{outputVolume}%</span>
         </div>
-        <input
-          type="range" min={0} max={200} value={outputVolume}
-          onChange={(e) => setOutputVolume(Number(e.target.value))}
-          style={s.slider}
-        />
+        <input type="range" min={0} max={200} value={outputVolume}
+          onChange={(e) => setOutputVolume(Number(e.target.value))} style={s.slider} />
       </div>
+
+      {audioDevices.inputs.length > 0 && (
+        <div style={s.popoverSection}>
+          <div style={s.popoverLabelRow}>
+            <span style={s.popoverLabel}>Microphone</span>
+          </div>
+          <select value={selectedInput} onChange={(e) => setSelectedInput(e.target.value)} style={s.deviceSelect}>
+            {audioDevices.inputs.map(d => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Microphone ${d.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {audioDevices.outputs.length > 0 && (
+        <div style={s.popoverSection}>
+          <div style={s.popoverLabelRow}>
+            <span style={s.popoverLabel}>Speaker / headphones</span>
+          </div>
+          <select value={selectedOutput} onChange={(e) => setSelectedOutput(e.target.value)} style={s.deviceSelect}>
+            {audioDevices.outputs.map(d => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Speaker ${d.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   )
 }
@@ -67,18 +97,14 @@ function VoiceSettingsPopover({ sensitivity, setSensitivity, micLevel, outputVol
 function UserVolumePopover({ name, gain, onChange, onClose }) {
   const ref = useRef(null)
   useClickOutside(ref, onClose)
-
   return (
     <div ref={ref} style={s.userPopover}>
       <div style={s.popoverLabelRow}>
         <span style={s.popoverLabel}>{name}'s volume</span>
         <span style={s.popoverValue}>{gain}%</span>
       </div>
-      <input
-        type="range" min={0} max={200} value={gain}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={s.slider}
-      />
+      <input type="range" min={0} max={200} value={gain}
+        onChange={(e) => onChange(Number(e.target.value))} style={s.slider} />
     </div>
   )
 }
@@ -108,15 +134,14 @@ export default function Room() {
     setStoredTheme(key)
   }
 
-function handleJoin(chosenName) {
-  // Generate a fresh identity now, with the user's chosen name
-  const base = getOrCreateIdentity()
-  const updated = { ...base, name: chosenName.trim().slice(0, 20) || base.name }
-  sessionStorage.setItem('syncboard-identity', JSON.stringify(updated))
-  sessionStorage.setItem(`joined-${code}`, 'true')
-  setIdentity(updated)
-  setHasJoined(true)
-}
+  function handleJoin(chosenName) {
+    const base = getOrCreateIdentity()
+    const updated = { ...base, name: chosenName.trim().slice(0, 20) || base.name }
+    sessionStorage.setItem('syncboard-identity', JSON.stringify(updated))
+    sessionStorage.setItem(`joined-${code}`, 'true')
+    setIdentity(updated)
+    setHasJoined(true)
+  }
 
   useEffect(() => {
     async function checkRoom() {
@@ -126,21 +151,13 @@ function handleJoin(chosenName) {
         .eq('code', code)
         .maybeSingle()
 
-      if (!data) {
-        setRoomExists(false)
-        return
-      }
+      if (!data) { setRoomExists(false); return }
 
       const ageHours = (Date.now() - new Date(data.created_at).getTime()) / (1000 * 60 * 60)
-      if (ageHours > 24) {
-        setExpired(true)
-        setRoomExists(false)
-        return
-      }
+      if (ageHours > 24) { setExpired(true); setRoomExists(false); return }
 
       setRoomExists(true)
       setRoomId(data.id)
-
       const myIdentity = getOrCreateIdentity()
       setIsHost(data.host_id === myIdentity.id)
     }
@@ -152,6 +169,7 @@ function handleJoin(chosenName) {
     inVoice, muted, voiceUsers, joinVoice, leaveVoice, toggleMute,
     sensitivity, setSensitivity, micLevel,
     outputVolume, setOutputVolume, userOutputGains, setUserOutputGain,
+    audioDevices, selectedInput, setSelectedInput, selectedOutput, setSelectedOutput,
   } = useVoiceChat(channel, identity)
   const { notes, addNote, updateNote, deleteNote } = useNotes(code, roomId)
   const { messages, sendMessage } = useChat(code, roomId)
@@ -169,9 +187,7 @@ function handleJoin(chosenName) {
   }, [channel])
 
   const handleDragBroadcast = useCallback((noteId, x, y) => {
-    if (channel) {
-      channel.send({ type: 'broadcast', event: 'note-drag', payload: { noteId, x, y } })
-    }
+    if (channel) channel.send({ type: 'broadcast', event: 'note-drag', payload: { noteId, x, y } })
   }, [channel])
 
   const handleUpdate = useCallback((id, updates) => {
@@ -223,17 +239,9 @@ function handleJoin(chosenName) {
     )
   }
 
-if (roomExists === null) {
-  return <div style={s.loading}>Connecting...</div>
-}
-
-if (!hasJoined) {
-  return <JoinModal roomCode={code} onJoin={handleJoin} />
-}
-
-if (!identity) {
-  return <div style={s.loading}>Connecting...</div>
-}
+  if (roomExists === null) return <div style={s.loading}>Connecting...</div>
+  if (!hasJoined) return <JoinModal roomCode={code} onJoin={handleJoin} />
+  if (!identity) return <div style={s.loading}>Connecting...</div>
 
   return (
     <div style={{ ...s.page, background: theme.bg }}>
@@ -248,7 +256,7 @@ if (!identity) {
         <div style={s.headerRight}>
           <div style={s.userList}>
             {onlineUsers.map((user) => {
-              const speaking = voiceUsers.find((v) => v.id === user.id)
+              const voiceUser = voiceUsers.find((v) => v.id === user.id)
               const isSelf = user.id === identity.id
               const gain = userOutputGains[user.id] ?? 100
               return (
@@ -257,14 +265,14 @@ if (!identity) {
                     onClick={() => !isSelf && inVoice && setOpenUserVolumeId(openUserVolumeId === user.id ? null : user.id)}
                     style={{
                       ...s.userPill,
-                      border: speaking?.speaking ? '1px solid #4ade80' : '1px solid #2a2a3a',
+                      border: voiceUser?.speaking ? '1px solid #4ade80' : '1px solid #2a2a3a',
                       cursor: !isSelf && inVoice ? 'pointer' : 'default',
                     }}
                     title={!isSelf && inVoice ? `Adjust ${user.name}'s volume` : undefined}
                   >
                     <div style={{ ...s.userDot, background: user.color }} />
                     <span>{user.name}</span>
-                    {speaking?.speaking && <span style={s.voiceIcon}>🎙️</span>}
+                    {voiceUser?.speaking && <span style={s.voiceIcon}>🎙️</span>}
                     {!isSelf && inVoice && gain !== 100 && <span style={s.gainBadge}>{gain}%</span>}
                   </button>
                   {openUserVolumeId === user.id && (
@@ -280,11 +288,8 @@ if (!identity) {
             })}
           </div>
 
-          <select
-            value={themeKey}
-            onChange={(e) => handleThemeChange(e.target.value)}
-            style={{ ...s.themeSelect, borderColor: theme.border }}
-          >
+          <select value={themeKey} onChange={(e) => handleThemeChange(e.target.value)}
+            style={{ ...s.themeSelect, borderColor: theme.border }}>
             {Object.entries(CANVAS_THEMES).map(([key, t]) => (
               <option key={key} value={key}>{t.name}</option>
             ))}
@@ -308,6 +313,11 @@ if (!identity) {
                     micLevel={micLevel}
                     outputVolume={outputVolume}
                     setOutputVolume={setOutputVolume}
+                    audioDevices={audioDevices}
+                    selectedInput={selectedInput}
+                    setSelectedInput={setSelectedInput}
+                    selectedOutput={selectedOutput}
+                    setSelectedOutput={setSelectedOutput}
                     onClose={() => setShowVoiceSettings(false)}
                   />
                 )}
@@ -352,9 +362,7 @@ if (!identity) {
           <div style={{ ...s.chatPanel, background: theme.panelBg, borderLeftColor: theme.border }}>
             <div style={s.chatHeader}>Live chat</div>
             <div style={s.chatMessages}>
-              {messages.length === 0 && (
-                <p style={s.chatEmpty}>No messages yet. Say hi!</p>
-              )}
+              {messages.length === 0 && <p style={s.chatEmpty}>No messages yet. Say hi!</p>}
               {messages.map((msg) => (
                 <div key={msg.id} style={s.chatMessage}>
                   <span style={{ ...s.chatAuthor, color: msg.author_color }}>{msg.author_name}</span>
@@ -363,12 +371,8 @@ if (!identity) {
               ))}
             </div>
             <form onSubmit={handleSendChat} style={s.chatForm}>
-              <input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Type a message..."
-                style={s.chatInput}
-              />
+              <input value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Type a message..." style={s.chatInput} />
               <button type="submit" style={s.chatSendBtn}>→</button>
             </form>
           </div>
@@ -379,137 +383,56 @@ if (!identity) {
 }
 
 const s = {
-  leaveBtn: {
-    background: 'transparent', border: '1px solid #2a2a3a', borderRadius: 8,
-    color: '#aaa', padding: '8px 14px', fontSize: 13, cursor: 'pointer',
-  },
-  closeRoomBtn: {
-    background: '#3a1a1a', border: '1px solid #5a2a2a', borderRadius: 8,
-    color: '#f87171', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600,
-  },
+  leaveBtn: { background: 'transparent', border: '1px solid #2a2a3a', borderRadius: 8, color: '#aaa', padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
+  closeRoomBtn: { background: '#3a1a1a', border: '1px solid #5a2a2a', borderRadius: 8, color: '#f87171', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600 },
   page: { height: '100vh', display: 'flex', flexDirection: 'column' },
-  header: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '14px 24px', borderBottom: '1px solid', flexWrap: 'wrap', gap: 10,
-  },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 24px', borderBottom: '1px solid', flexWrap: 'wrap', gap: 10 },
   headerLeft: { display: 'flex', alignItems: 'center', gap: 16 },
   headerRight: { display: 'flex', alignItems: 'center', gap: 12 },
   logo: { fontSize: 16, fontWeight: 700, color: '#7c6ef5' },
-  codeBadge: {
-    background: '#16161f', border: '1px solid #2a2a3a',
-    borderRadius: 8, padding: '6px 14px', color: '#aaa',
-    fontSize: 13, cursor: 'pointer', fontWeight: 600,
-  },
+  codeBadge: { background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 8, padding: '6px 14px', color: '#aaa', fontSize: 13, cursor: 'pointer', fontWeight: 600 },
   userList: { display: 'flex', gap: 8 },
   userPillWrap: { position: 'relative' },
-  userPill: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    background: '#16161f', border: '1px solid #2a2a3a',
-    borderRadius: 20, padding: '5px 12px', fontSize: 12, color: '#ccc',
-    font: 'inherit',
-  },
+  userPill: { display: 'flex', alignItems: 'center', gap: 6, background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 20, padding: '5px 12px', fontSize: 12, color: '#ccc', font: 'inherit' },
   userDot: { width: 7, height: 7, borderRadius: '50%' },
-  gainBadge: {
-    fontSize: 10, color: '#7c6ef5', background: '#1f1a3a',
-    borderRadius: 8, padding: '1px 6px', marginLeft: 2, fontWeight: 700,
-  },
-  themeSelect: {
-    background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 8,
-    color: '#aaa', padding: '8px 12px', fontSize: 13, cursor: 'pointer', outline: 'none',
-  },
-  voiceJoinBtn: {
-    background: '#1a3a2a', border: '1px solid #2a5a3a', borderRadius: 8,
-    color: '#4ade80', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600,
-  },
+  gainBadge: { fontSize: 10, color: '#7c6ef5', background: '#1f1a3a', borderRadius: 8, padding: '1px 6px', marginLeft: 2, fontWeight: 700 },
+  themeSelect: { background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 8, color: '#aaa', padding: '8px 12px', fontSize: 13, cursor: 'pointer', outline: 'none' },
+  voiceJoinBtn: { background: '#1a3a2a', border: '1px solid #2a5a3a', borderRadius: 8, color: '#4ade80', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600 },
   voiceControls: { display: 'flex', gap: 6, alignItems: 'center' },
-  voiceMuteBtn: {
-    border: '1px solid #2a5a3a', borderRadius: 8,
-    color: '#fff', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600,
-  },
-  voiceLeaveBtn: {
-    background: '#3a1a1a', border: '1px solid #5a2a2a', borderRadius: 8,
-    color: '#f87171', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600,
-  },
+  voiceMuteBtn: { border: '1px solid #2a5a3a', borderRadius: 8, color: '#fff', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600 },
+  voiceLeaveBtn: { background: '#3a1a1a', border: '1px solid #5a2a2a', borderRadius: 8, color: '#f87171', padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: 600 },
   voiceIcon: { fontSize: 10, marginLeft: 2 },
   voiceSettingsWrap: { position: 'relative', display: 'flex' },
-  voiceSettingsBtn: {
-    background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 8,
-    color: '#ccc', padding: '8px 10px', fontSize: 13, cursor: 'pointer',
-  },
-  chatToggleBtn: {
-    background: 'transparent', border: '1px solid #2a2a3a', borderRadius: 8,
-    color: '#aaa', padding: '8px 14px', fontSize: 13, cursor: 'pointer',
-  },
-  addBtn: {
-    background: '#7c6ef5', border: 'none', borderRadius: 8,
-    color: '#fff', padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-  },
+  voiceSettingsBtn: { background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 8, color: '#ccc', padding: '8px 10px', fontSize: 13, cursor: 'pointer' },
+  chatToggleBtn: { background: 'transparent', border: '1px solid #2a2a3a', borderRadius: 8, color: '#aaa', padding: '8px 14px', fontSize: 13, cursor: 'pointer' },
+  addBtn: { background: '#7c6ef5', border: 'none', borderRadius: 8, color: '#fff', padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   body: { flex: 1, display: 'flex', overflow: 'hidden' },
-  canvas: {
-    flex: 1, position: 'relative', overflow: 'hidden',
-    backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px)',
-    backgroundSize: '24px 24px',
-  },
-  emptyHint: {
-    position: 'absolute', top: '50%', left: '50%',
-    transform: 'translate(-50%, -50%)', color: '#444', fontSize: 14,
-  },
-  chatPanel: {
-    width: 280, borderLeft: '1px solid', display: 'flex', flexDirection: 'column',
-  },
-  chatHeader: {
-    padding: '12px 16px', fontSize: 13, fontWeight: 600,
-    color: '#888', borderBottom: '1px solid #1a1a2a',
-  },
+  canvas: { flex: 1, position: 'relative', overflow: 'hidden', backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px)', backgroundSize: '24px 24px' },
+  emptyHint: { position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#444', fontSize: 14 },
+  chatPanel: { width: 280, borderLeft: '1px solid', display: 'flex', flexDirection: 'column' },
+  chatHeader: { padding: '12px 16px', fontSize: 13, fontWeight: 600, color: '#888', borderBottom: '1px solid #1a1a2a' },
   chatMessages: { flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 },
   chatEmpty: { color: '#444', fontSize: 13, textAlign: 'center', marginTop: 20 },
   chatMessage: {},
   chatAuthor: { fontSize: 12, fontWeight: 700 },
   chatText: { fontSize: 13, color: '#ccc', marginTop: 2, lineHeight: 1.4 },
   chatForm: { display: 'flex', padding: 12, gap: 8, borderTop: '1px solid #1a1a2a' },
-  chatInput: {
-    flex: 1, background: '#16161f', border: '1px solid #2a2a3a',
-    borderRadius: 8, padding: '8px 12px', color: '#f0f0f5', fontSize: 13, outline: 'none',
-  },
-  chatSendBtn: {
-    background: '#7c6ef5', border: 'none', borderRadius: 8,
-    color: '#fff', width: 36, cursor: 'pointer', fontSize: 14,
-  },
-  loading: {
-    height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    color: '#555', background: '#0a0a12',
-  },
-  notFound: {
-    height: '100vh', display: 'flex', flexDirection: 'column', gap: 16,
-    alignItems: 'center', justifyContent: 'center', color: '#888', background: '#0a0a12',
-  },
-  backBtn: {
-    background: '#7c6ef5', border: 'none', borderRadius: 8,
-    color: '#fff', padding: '10px 20px', cursor: 'pointer', fontSize: 14,
-  },
-  popover: {
-    position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 50,
-    width: 260, background: '#16161f', border: '1px solid #2a2a3a',
-    borderRadius: 12, padding: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-  },
+  chatInput: { flex: 1, background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 8, padding: '8px 12px', color: '#f0f0f5', fontSize: 13, outline: 'none' },
+  chatSendBtn: { background: '#7c6ef5', border: 'none', borderRadius: 8, color: '#fff', width: 36, cursor: 'pointer', fontSize: 14 },
+  loading: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#555', background: '#0a0a12' },
+  notFound: { height: '100vh', display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', justifyContent: 'center', color: '#888', background: '#0a0a12' },
+  backBtn: { background: '#7c6ef5', border: 'none', borderRadius: 8, color: '#fff', padding: '10px 20px', cursor: 'pointer', fontSize: 14 },
+  popover: { position: 'absolute', top: 'calc(100% + 8px)', right: 0, zIndex: 50, width: 280, background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 12, padding: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' },
   popoverHeader: { fontSize: 13, fontWeight: 700, color: '#f0f0f5', marginBottom: 12 },
   popoverSection: { marginBottom: 14 },
-  popoverLabelRow: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6,
-  },
+  popoverLabelRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 },
   popoverLabel: { fontSize: 12, color: '#aaa', fontWeight: 600 },
   popoverValue: { fontSize: 12, color: '#7c6ef5', fontWeight: 700 },
-  meterTrack: {
-    position: 'relative', height: 8, background: '#0a0a12',
-    borderRadius: 4, marginBottom: 8, overflow: 'visible',
-  },
+  meterTrack: { position: 'relative', height: 8, background: '#0a0a12', borderRadius: 4, marginBottom: 8, overflow: 'visible' },
   meterFill: { height: '100%', background: '#4ade80', borderRadius: 4, transition: 'width 60ms linear' },
   meterThreshold: { position: 'absolute', top: -3, bottom: -3, width: 2, background: '#f0f0f5', borderRadius: 1 },
   slider: { width: '100%', cursor: 'pointer', accentColor: '#7c6ef5' },
   sliderHints: { display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#555', marginTop: 4 },
-  userPopover: {
-    position: 'absolute', top: 'calc(100% + 8px)', left: 0, zIndex: 50,
-    width: 200, background: '#16161f', border: '1px solid #2a2a3a',
-    borderRadius: 12, padding: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-  },
+  deviceSelect: { width: '100%', background: '#0a0a12', border: '1px solid #2a2a3a', borderRadius: 8, color: '#ccc', padding: '7px 10px', fontSize: 12, cursor: 'pointer', outline: 'none' },
+  userPopover: { position: 'absolute', top: 'calc(100% + 8px)', left: 0, zIndex: 50, width: 200, background: '#16161f', border: '1px solid #2a2a3a', borderRadius: 12, padding: 14, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' },
 }
