@@ -40,7 +40,7 @@ const { error: insertError } = await supabase
       return
     }
 
-    navigate(`/room/${code}`)
+    navigate(`/room/${code}`, { replace: true })
   }
 
   async function handleJoinRoom(e) {
@@ -63,7 +63,7 @@ const { error: insertError } = await supabase
       return
     }
 
-    navigate(`/room/${code}`)
+    navigate(`/room/${code}`, { replace: true })
   }
 
   return (
