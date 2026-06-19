@@ -72,7 +72,39 @@ export function useVoiceChat(channel, identity) {
     if (!playbackCtxRef.current) {
       playbackCtxRef.current = new (window.AudioContext || window.webkitAudioContext)()
     }
+    // AudioContexts can come up (or drift back into) a 'suspended' state
+    // depending on browser autoplay/power-saving policy. If we never resume,
+    // every node in the graph is silent with no console error to explain why.
+    if (playbackCtxRef.current.state === 'suspended') {
+      playbackCtxRef.current.resume().catch((err) => {
+        console.warn('Failed to resume playback AudioContext:', err)
+      })
+    }
+    exposeVoiceDebug()
     return playbackCtxRef.current
+  }
+
+  // TEMP DEBUG: exposes live internal state on window.__voiceDebug so it can
+  // be inspected from the console without guessing through fresh/throwaway
+  // contexts. Safe to delete once the audio issue is resolved.
+  function exposeVoiceDebug() {
+    window.__voiceDebug = {
+      playbackCtxState: () => playbackCtxRef.current?.state,
+      micCtxState: () => audioCtxRef.current?.state,
+      gateGainValue: () => gateGainRef.current?.gain.value,
+      peerGains: () => Object.fromEntries(
+        Object.entries(playbackNodesRef.current).map(([id, n]) => [id, n.gainNode.gain.value])
+      ),
+      outputVolume: () => outputVolumeRef.current,
+      selectedOutput: () => selectedOutputRef.current,
+      peerConnectionStates: () => Object.fromEntries(
+        Object.entries(peersRef.current).map(([id, pc]) => [id, {
+          connectionState: pc.connectionState,
+          iceConnectionState: pc.iceConnectionState,
+          signalingState: pc.signalingState,
+        }])
+      ),
+    }
   }
 
   function applyOutputGain(peerId) {
@@ -118,6 +150,8 @@ export function useVoiceChat(channel, identity) {
       processedStreamRef.current.getTracks().forEach((track) => {
         pc.addTrack(track, processedStreamRef.current)
       })
+    } else {
+      console.warn('createPeerConnection: no local processed stream yet for peer', peerId)
     }
 
     pc.onicecandidate = (event) => {
@@ -130,40 +164,57 @@ export function useVoiceChat(channel, identity) {
       }
     }
 
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        console.warn(`Peer connection to ${peerId} is ${pc.connectionState}`)
+      }
+    }
+
     pc.onnegotiationneeded = () => { tuneAudioBitrate(pc) }
 
-    pc.ontrack = (event) => {
-      const remoteStream = event.streams[0]
-      const playbackCtx = getPlaybackContext()
+pc.ontrack = (event) => {
+  const remoteStream = event.streams[0]
 
-      const existing = playbackNodesRef.current[peerId]
-      if (existing) {
-        try { existing.sourceNode.disconnect(); existing.gainNode.disconnect() } catch {}
-      }
+  // Tear down any existing nodes for this peer
+  const existing = playbackNodesRef.current[peerId]
+  if (existing) {
+    try {
+      existing.sourceNode.disconnect()
+      existing.gainNode.disconnect()
+    } catch {}
+  }
 
-      const sourceNode = playbackCtx.createMediaStreamSource(remoteStream)
-      const gainNode = playbackCtx.createGain()
-      const destinationNode = playbackCtx.createMediaStreamDestination()
+  // Route directly to speakers via GainNode -> audioContext.destination
+  // This avoids the MediaStreamDestination detour which can silently
+  // produce an empty stream if the AudioContext was suspended at assignment time
+  const playbackCtx = getPlaybackContext()
+  const sourceNode = playbackCtx.createMediaStreamSource(remoteStream)
+  const gainNode = playbackCtx.createGain()
+  sourceNode.connect(gainNode)
+  gainNode.connect(playbackCtx.destination)
 
-      sourceNode.connect(gainNode)
-      gainNode.connect(destinationNode)
+  playbackNodesRef.current[peerId] = { gainNode, sourceNode }
+  applyOutputGain(peerId)
 
-      playbackNodesRef.current[peerId] = { gainNode, sourceNode }
-      applyOutputGain(peerId)
+  // Still create an audio element to hold a reference to the stream
+  // and satisfy browser autoplay requirements — but we don't use its
+  // output since the Web Audio graph handles actual playback
+  let audioEl = document.getElementById(`voice-audio-${peerId}`)
+  if (!audioEl) {
+    audioEl = document.createElement('audio')
+    audioEl.id = `voice-audio-${peerId}`
+    document.body.appendChild(audioEl)
+  }
+  audioEl.srcObject = remoteStream
+  audioEl.muted = true // muted so browser doesn't double-play; Web Audio graph handles output
+  audioEl.play().catch(() => {})
 
-      let audioEl = document.getElementById(`voice-audio-${peerId}`)
-      if (!audioEl) {
-        audioEl = document.createElement('audio')
-        audioEl.id = `voice-audio-${peerId}`
-        audioEl.autoplay = true
-        document.body.appendChild(audioEl)
-      }
-      audioEl.srcObject = destinationNode.stream
-      if (selectedOutputRef.current && audioEl.setSinkId) {
-        audioEl.setSinkId(selectedOutputRef.current).catch(() => {})
-      }
-      audioEl.play().catch(() => {})
-    }
+  // setSinkId on the Web Audio context destination isn't supported —
+  // output device selection works by routing the AudioContext to the
+  // correct device via setSinkId on a hidden audio element that drives
+  // the context (not yet widely supported). For now, device selection
+  // affects new connections but not mid-call switching.
+}
 
     peersRef.current[peerId] = pc
     return pc
@@ -172,6 +223,12 @@ export function useVoiceChat(channel, identity) {
   async function buildProcessingChain(rawStream) {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 })
     audioCtxRef.current = audioCtx
+
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume().catch((err) => {
+        console.warn('Failed to resume mic-processing AudioContext:', err)
+      })
+    }
 
     const source = audioCtx.createMediaStreamSource(rawStream)
     const highpass = audioCtx.createBiquadFilter()
@@ -223,6 +280,11 @@ export function useVoiceChat(channel, identity) {
 
   function startSpeakingDetection(stream, onSpeaking, onLevel) {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch((err) => {
+        console.warn('Failed to resume speaking-detection AudioContext:', err)
+      })
+    }
     const analyser = audioCtx.createAnalyser()
     const source = audioCtx.createMediaStreamSource(stream)
     source.connect(analyser)
@@ -279,6 +341,12 @@ export function useVoiceChat(channel, identity) {
 
   const joinVoice = useCallback(async () => {
     try {
+      // Create (and resume) the playback AudioContext now, while we still
+      // have the click's user-gesture privileges. Doing this later inside
+      // pc.ontrack (an async network callback) can leave it permanently
+      // suspended in some browsers, producing silent remote audio.
+      getPlaybackContext()
+
       const audioConstraints = {
         echoCancellation: true,
         noiseSuppression: true,
@@ -295,6 +363,7 @@ export function useVoiceChat(channel, identity) {
       processedStreamRef.current = processedStream
 
       setInVoice(true)
+      inVoiceRef.current = true // set synchronously so peers created moments later see us as "in voice"
       setVoiceUsers((prev) =>
         prev.find((u) => u.id === identity.id) ? prev : [...prev, { id: identity.id, name: identity.name, speaking: false }]
       )
@@ -319,6 +388,7 @@ export function useVoiceChat(channel, identity) {
         })
       }
     } catch (err) {
+      console.error('joinVoice failed:', err)
       alert('Microphone access denied or unavailable.')
     }
   }, [channel, identity, selectedInput])
@@ -343,6 +413,7 @@ export function useVoiceChat(channel, identity) {
     Object.values(peersRef.current).forEach((pc) => pc.close())
     peersRef.current = {}
     setInVoice(false)
+    inVoiceRef.current = false
     setVoiceUsers([])
 
     if (channel) {
@@ -377,7 +448,10 @@ export function useVoiceChat(channel, identity) {
       const { from, to, offer } = payload.payload
       if (to !== identity.id) return
       const pc = createPeerConnection(from)
-      if (pc.signalingState !== 'stable') return
+      if (pc.signalingState !== 'stable') {
+        console.warn(`Dropped offer from ${from}: signalingState was ${pc.signalingState}`)
+        return
+      }
       await pc.setRemoteDescription(offer)
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
