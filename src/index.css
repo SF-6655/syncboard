@@ -1,3 +1,27 @@
+html {
+  overflow: hidden;
+  height: 100%;
+  touch-action: none;
+}
+
+body {
+  overflow: hidden;
+  height: 100%;
+  min-width: 1280px;
+  touch-action: none;
+}
+
+* {
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: auto;
+}
 * {
   margin: 0;
   padding: 0;
@@ -26,3 +50,4 @@ input, textarea, select, button {
   background: #5a4fd6;
   border-radius: 3px;
 }
+
