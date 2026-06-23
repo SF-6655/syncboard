@@ -151,6 +151,7 @@ export default function Room() {
   } = useVoiceChat(channel, identity)
   const { notes, addNote, updateNote, deleteNote } = useNotes(code, roomId)
   const { messages, sendMessage } = useChat(code, roomId)
+  const chatBottomRef = useRef(null)
   const { strokes, saveStroke, clearBoard } = useWhiteboard(roomId, channel)
 
   useEffect(() => {
@@ -164,6 +165,12 @@ export default function Room() {
       })
     })
   }, [channel])
+
+  useEffect(() => {
+  if (chatBottomRef.current) {
+    chatBottomRef.current.scrollIntoView({ behavior: 'smooth' })
+  }
+}, [messages])
 
   const handleDragBroadcast = useCallback((noteId, x, y) => {
     if (channel) channel.send({ type: 'broadcast', event: 'note-drag', payload: { noteId, x, y } })
@@ -364,15 +371,16 @@ export default function Room() {
         {showChat && (
           <div style={{ ...s.chatPanel, background: theme.panelBg, borderLeftColor: theme.border }}>
             <div style={s.chatHeader}>Live chat</div>
-            <div style={s.chatMessages}>
-              {messages.length === 0 && <p style={s.chatEmpty}>No messages yet. Say hi!</p>}
-              {messages.map((msg) => (
-                <div key={msg.id} style={s.chatMessage}>
-                  <span style={{ ...s.chatAuthor, color: msg.author_color }}>{msg.author_name}</span>
-                  <p style={s.chatText}>{msg.text}</p>
-                </div>
-              ))}
-            </div>
+<div style={s.chatMessages}>
+  {messages.length === 0 && <p style={s.chatEmpty}>No messages yet. Say hi!</p>}
+  {messages.map((msg) => (
+    <div key={msg.id} style={s.chatMessage}>
+      <span style={{ ...s.chatAuthor, color: msg.author_color }}>{msg.author_name}</span>
+      <p style={s.chatText}>{msg.text}</p>
+    </div>
+  ))}
+  <div ref={chatBottomRef} />
+</div>
             <form onSubmit={handleSendChat} style={s.chatForm}>
               <input value={chatInput} onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Type a message..." style={s.chatInput} />
